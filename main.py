@@ -1,5 +1,4 @@
 import logging
-import time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
 
@@ -8,9 +7,6 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
-
-# Time limit for questions (in seconds)
-QUESTION_TIME_LIMIT = 30
 
 # Dictionary to store user scores
 user_scores = {}
@@ -467,9 +463,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         keyboard.append([InlineKeyboardButton(text, callback_data=data)])
     
     # Add additional buttons
-    if not scenario_key.endswith("_wrong"):  # Don't show results button on wrong screens
-        keyboard.append([InlineKeyboardButton("📊 Результати", callback_data="results")])
-    
+    keyboard.append([InlineKeyboardButton("📊 Результати", callback_data="results")])
     keyboard.append([InlineKeyboardButton("🔄 Скинути прогрес", callback_data="reset")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -480,10 +474,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         message_text += f"{scenario['description']}\n\n"
     if "question" in scenario:
         message_text += f"{scenario['question']}\n\n"
-        
-        # Add timer information if this is a question (not a wrong or result page)
-        if not query.data.endswith("_wrong") and not query.data.endswith("_result"):
-            message_text += f"⏱️ *Маєш {QUESTION_TIME_LIMIT} секунд на відповідь*\n\n"
     
     if "explanation" in scenario:
         message_text += f"_Пояснення: {scenario['explanation']}_"
@@ -502,61 +492,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             reply_markup=reply_markup,
             parse_mode="Markdown"
         )
-
-# Simplified time-up callback without job handling complexity
-async def time_up_callback(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Called when the timer for a question expires."""
-    job_data = context.job.data
-    chat_id = job_data["chat_id"]
-    message_id = job_data["message_id"]
-    question = job_data["question"]
-    
-    # Get the corresponding _wrong destination
-    wrong_destination = f"{question}_wrong"
-    
-    # Check if the wrong destination exists, otherwise go to start
-    if wrong_destination not in SCENARIOS:
-        wrong_destination = "start"
-    
-    # Get the wrong scenario
-    scenario = SCENARIOS[wrong_destination]
-    
-    # Create keyboard from options
-    keyboard = []
-    for text, data in scenario["options"]:
-        keyboard.append([InlineKeyboardButton(text, callback_data=data)])
-    
-    # Add reset button
-    keyboard.append([InlineKeyboardButton("🔄 Скинути прогрес", callback_data="reset")])
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    # Format the message
-    message_text = f"*{scenario['title']}*\n\n"
-    message_text += "⏱️ *Час вийшов!* Ти не встиг відповісти вчасно.\n\n"
-    if "description" in scenario:
-        message_text += f"{scenario['description']}\n\n"
-    
-    try:
-        await context.bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=message_id,
-            text=message_text,
-            reply_markup=reply_markup,
-            parse_mode="Markdown"
-        )
-    except Exception as e:
-        logger.error(f"Error sending time up message: {e}")
-        # Try to send a new message if edit fails
-        try:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=message_text,
-                reply_markup=reply_markup,
-                parse_mode="Markdown"
-            )
-        except:
-            pass
 
 def main() -> None:
     """Start the bot."""
