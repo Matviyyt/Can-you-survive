@@ -1,4 +1,6 @@
 import logging
+import asyncio
+import time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
 
@@ -8,26 +10,32 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Time limit for questions (in seconds)
+QUESTION_TIME_LIMIT = 30
+
+# Dictionary to store user scores
+user_scores = {}
+
 # Define scenarios
 SCENARIOS = {
     "start": {
         "title": "Інтерактивний тест: Ти зможеш вижити?",
         "description": "Вітаємо в симуляторі виживання!\nОбери один зі сценаріїв і спробуй пройти шлях до виживання. Наприкінці отримаєш результат.",
         "options": [
-            ("Ти загубився в пустелі", "desert_1"),
-            ("Тебе занесло у горах", "mountain_1"),
-            ("Апокаліпсис — зникло світло", "apocalypse_1"),
-            ("Ти загубився в лісі", "forest_1"),
+            ("🏜️ Пустеля", "desert_1"),
+            ("⛰️ Гори", "mountain_1"),
+            ("🌆 Апокаліпсис", "apocalypse_1"),
+            ("🌲 Ліс", "forest_1"),
         ],
     },
     "desert_1": {
-        "title": "Сценарій 1 — Ти загубився в пустелі",
+        "title": "Сценарій: Ти загубився в пустелі",
         "description": "Ти опинився зовсім один посеред безкрайньої розпеченої пустелі. Навколо — тільки пісок, спека і повна невідомість, а вижити можна лише приймаючи правильні рішення.",
         "question": "Крок 1: Що ти робиш першим?",
         "options": [
-            ("Йдеш одразу в одному напрямку, сподіваючись знайти людей", "desert_1_wrong"),
-            ("Ховаєшся в тінь, щоб перечекати найспекотніший час", "desert_2"),
-            ("Кричиш і кличеш на допомогу", "desert_1_wrong"),
+            ("A) Йдеш в одному напрямку", "desert_1_wrong"),
+            ("Б) Ховаєшся в тінь", "desert_2"),
+            ("В) Кличеш на допомогу", "desert_1_wrong"),
         ],
         "explanation": "У пустелі головна небезпека – спека й зневоднення. Треба зберігати енергію і чекати вечора."
     },
@@ -35,8 +43,8 @@ SCENARIOS = {
         "title": "Неправильний вибір",
         "description": "На жаль, це не найкраще рішення у пустелі. Спека та зневоднення можуть швидко виснажити твої сили.",
         "options": [
-            ("Спробувати ще раз", "desert_1"),
-            ("Повернутися до вибору сценарію", "start"),
+            ("↩️ Спробувати ще раз", "desert_1"),
+            ("🏠 До головного меню", "start"),
         ],
     },
     "desert_2": {
@@ -44,9 +52,9 @@ SCENARIOS = {
         "description": "Ти правильно вирішив зберегти енергію.",
         "question": "Крок 2: У тебе є півпляшки води. Як ти її використовуєш?",
         "options": [
-            ("Випиваєш одразу – хочеться пити", "desert_2_wrong"),
-            ("П'єш потроху, ковтками протягом дня", "desert_3"),
-            ("Заливаєш на голову, щоб охолонути", "desert_2_wrong"),
+            ("A) Випиваєш одразу", "desert_2_wrong"),
+            ("Б) П'єш потроху", "desert_3"),
+            ("В) Заливаєш на голову", "desert_2_wrong"),
         ],
         "explanation": "Важливо уникати зневоднення, тому потрібно пити розумно."
     },
@@ -54,8 +62,8 @@ SCENARIOS = {
         "title": "Неправильний вибір",
         "description": "На жаль, це не найкраще використання обмеженого запасу води у пустелі.",
         "options": [
-            ("Спробувати ще раз", "desert_2"),
-            ("Повернутися до вибору сценарію", "start"),
+            ("↩️ Спробувати ще раз", "desert_2"),
+            ("🏠 До головного меню", "start"),
         ],
     },
     "desert_3": {
@@ -63,9 +71,9 @@ SCENARIOS = {
         "description": "Економне використання води допоможе тобі вижити довше.",
         "question": "Крок 3: Уночі дуже холодно. Що робиш?",
         "options": [
-            ("Палиш все, що маєш, для тепла", "desert_3_wrong"),
-            ("Зариваєшся в пісок або вкриваєшся одягом", "desert_result"),
-            ("Йдеш далі, бо краще йти вночі, ніж удень", "desert_3_wrong"),
+            ("A) Палиш все для тепла", "desert_3_wrong"),
+            ("Б) Зариваєшся в пісок", "desert_result"),
+            ("В) Йдеш далі вночі", "desert_3_wrong"),
         ],
         "explanation": "Зниження температури вночі - типове для пустелі. Тепло тіла треба зберігати."
     },
@@ -73,28 +81,29 @@ SCENARIOS = {
         "title": "Неправильний вибір",
         "description": "На жаль, це не найкраще рішення для виживання холодної ночі у пустелі.",
         "options": [
-            ("Спробувати ще раз", "desert_3"),
-            ("Повернутися до вибору сценарію", "start"),
+            ("↩️ Спробувати ще раз", "desert_3"),
+            ("🏠 До головного меню", "start"),
         ],
     },
     "desert_result": {
         "title": "Результат: Виживання в пустелі",
         "description": "Вітаємо! Ти набрав 3 бали: вижив, дочекався рятувальників.\n\nТи зробив правильні кроки:\n1. Зберіг енергію, перечекавши спеку в тіні\n2. Раціонально використав обмежені запаси води\n3. Захистився від нічного холоду",
         "options": [
-            ("Обрати інший сценарій", "start"),
-            ("Пройти цей сценарій знову", "desert_1"),
+            ("🏠 До головного меню", "start"),
+            ("🔄 Пройти ще раз", "desert_1"),
         ],
+        "score": 3
     },
     
     # Mountain scenario
     "mountain_1": {
-        "title": "Сценарій 2 — Тебе занесло у горах",
+        "title": "Сценарій: Тебе занесло у горах",
         "description": "Ти загубився в горах після снігової бурі. Телефон не ловить, температура — -5°C. Ти одягнений, але без спеціального спорядження.",
         "question": "Крок 1: Що робиш першим?",
         "options": [
-            ("Починаєш спускатися в долину, щоб знайти людей", "mountain_1_wrong"),
-            ("Розпалюєш вогонь і робиш укриття", "mountain_2"),
-            ("Кричиш і намагаєшся знайти мобільний сигнал", "mountain_1_wrong"),
+            ("A) Спускаєшся в долину", "mountain_1_wrong"),
+            ("Б) Робиш укриття", "mountain_2"),
+            ("В) Шукаєш сигнал", "mountain_1_wrong"),
         ],
         "explanation": "Спершу потрібно зберегти тепло і захиститися від переохолодження."
     },
@@ -102,8 +111,8 @@ SCENARIOS = {
         "title": "Неправильний вибір",
         "description": "На жаль, це не найкраще рішення у горах при низькій температурі.",
         "options": [
-            ("Спробувати ще раз", "mountain_1"),
-            ("Повернутися до вибору сценарію", "start"),
+            ("↩️ Спробувати ще раз", "mountain_1"),
+            ("🏠 До головного меню", "start"),
         ],
     },
     "mountain_2": {
@@ -111,9 +120,9 @@ SCENARIOS = {
         "description": "Збереження тепла - пріоритет у холодних горах.",
         "question": "Крок 2: У тебе є батончик і трохи води. Як розподілиш?",
         "options": [
-            ("Їси й п'єш одразу, щоб набратися сил", "mountain_2_wrong"),
-            ("Залишаєш \"на потім\" — можливо, хтось прийде", "mountain_2_wrong"),
-            ("Їси і п'єш малими порціями, рівномірно", "mountain_3"),
+            ("A) Їси й п'єш одразу", "mountain_2_wrong"),
+            ("Б) Залишаєш на потім", "mountain_2_wrong"),
+            ("В) Їси і п'єш потроху", "mountain_3"),
         ],
         "explanation": "Організм потребує енергії, але різкий сплеск калорій у стресі – погана ідея."
     },
@@ -121,8 +130,8 @@ SCENARIOS = {
         "title": "Неправильний вибір",
         "description": "На жаль, це не найкраще використання обмежених запасів у горах.",
         "options": [
-            ("Спробувати ще раз", "mountain_2"),
-            ("Повернутися до вибору сценарію", "start"),
+            ("↩️ Спробувати ще раз", "mountain_2"),
+            ("🏠 До головного меню", "start"),
         ],
     },
     "mountain_3": {
@@ -130,9 +139,9 @@ SCENARIOS = {
         "description": "Рівномірне споживання їжі та води допоможе підтримувати енергію.",
         "question": "Крок 3: Ти бачиш ущелину. Що робиш?",
         "options": [
-            ("Спускаєшся вниз, бо там може бути річка", "mountain_3_wrong"),
-            ("Обходиш, шукаючи безпечніший шлях", "mountain_result"),
-            ("Залишаєшся на місці", "mountain_3_wrong"),
+            ("A) Спускаєшся до річки", "mountain_3_wrong"),
+            ("Б) Шукаєш інший шлях", "mountain_result"),
+            ("В) Залишаєшся на місці", "mountain_3_wrong"),
         ],
         "explanation": "Рельєф у горах небезпечний. Спуск у незнайому ущелину без екіпірування – ризикований."
     },
@@ -140,28 +149,29 @@ SCENARIOS = {
         "title": "Неправильний вибір",
         "description": "На жаль, це небезпечне рішення у гірських умовах.",
         "options": [
-            ("Спробувати ще раз", "mountain_3"),
-            ("Повернутися до вибору сценарію", "start"),
+            ("↩️ Спробувати ще раз", "mountain_3"),
+            ("🏠 До головного меню", "start"),
         ],
     },
     "mountain_result": {
         "title": "Результат: Виживання в горах",
         "description": "Вітаємо! Ти набрав 3 бали: вижив у гірських умовах.\n\nТи зробив правильні кроки:\n1. Зберіг тепло, створивши укриття\n2. Раціонально розподілив запаси їжі та води\n3. Обрав безпечний шлях руху",
         "options": [
-            ("Обрати інший сценарій", "start"),
-            ("Пройти цей сценарій знову", "mountain_1"),
+            ("🏠 До головного меню", "start"),
+            ("🔄 Пройти ще раз", "mountain_1"),
         ],
+        "score": 3
     },
     
     # Apocalypse scenario
     "apocalypse_1": {
-        "title": "Сценарій 3 — Апокаліпсис: зникло світло",
+        "title": "Сценарій: Апокаліпсис без світла",
         "description": "У місті сталася аварія. Немає електрики, зв'язку, паніка. Ти вдома, в тебе стандартні запаси.",
         "question": "Крок 1: Що робиш першим?",
         "options": [
-            ("Йдеш до магазину закупитися", "apocalypse_1_wrong"),
-            ("Перевіряєш, що маєш удома", "apocalypse_2"),
-            ("Пишеш у чаті друзям – можливо, хтось щось знає", "apocalypse_1_wrong"),
+            ("A) Йдеш до магазину", "apocalypse_1_wrong"),
+            ("Б) Перевіряєш запаси", "apocalypse_2"),
+            ("В) Пишеш друзям", "apocalypse_1_wrong"),
         ],
         "explanation": "У разі надзвичайної ситуації краще уникати натовпу. Оцінка запасів – перший крок."
     },
@@ -169,8 +179,8 @@ SCENARIOS = {
         "title": "Неправильний вибір",
         "description": "На жаль, це не найкраще рішення у ситуації відключення електрики.",
         "options": [
-            ("Спробувати ще раз", "apocalypse_1"),
-            ("Повернутися до вибору сценарію", "start"),
+            ("↩️ Спробувати ще раз", "apocalypse_1"),
+            ("🏠 До головного меню", "start"),
         ],
     },
     "apocalypse_2": {
@@ -178,9 +188,9 @@ SCENARIOS = {
         "description": "Знати, що в тебе є, допоможе спланувати подальші дії.",
         "question": "Крок 2: У тебе є трохи води. Як дієш?",
         "options": [
-            ("Вариш воду з крана", "apocalypse_3"),
-            ("Починаєш пити запаси", "apocalypse_2_wrong"),
-            ("П'єш напої - колу, сік, щоб зекономити воду", "apocalypse_2_wrong"),
+            ("A) Вариш воду з крана", "apocalypse_3"),
+            ("Б) П'єш запаси", "apocalypse_2_wrong"),
+            ("В) П'єш напої", "apocalypse_2_wrong"),
         ],
         "explanation": "Кип'ятіння – базовий спосіб знезараження води. Варто це зробити, поки є газ/тепло."
     },
@@ -188,8 +198,8 @@ SCENARIOS = {
         "title": "Неправильний вибір",
         "description": "На жаль, це не найкраще використання води у надзвичайній ситуації.",
         "options": [
-            ("Спробувати ще раз", "apocalypse_2"),
-            ("Повернутися до вибору сценарію", "start"),
+            ("↩️ Спробувати ще раз", "apocalypse_2"),
+            ("🏠 До головного меню", "start"),
         ],
     },
     "apocalypse_3": {
@@ -197,9 +207,9 @@ SCENARIOS = {
         "description": "Кип'ятіння знезаражує воду і робить її безпечною для пиття.",
         "question": "Крок 3: Наступна ніч. У квартирі холодно. Твої дії:",
         "options": [
-            ("Обклеюєш вікна, утеплюєш ліжко", "apocalypse_result"),
-            ("Спиш у ванній - там менше вікон", "apocalypse_3_wrong"),
-            ("Ідеш до друзів- у них більше ресурсів", "apocalypse_3_wrong"),
+            ("A) Утеплюєш вікна", "apocalypse_result"),
+            ("Б) Спиш у ванній", "apocalypse_3_wrong"),
+            ("В) Йдеш до друзів", "apocalypse_3_wrong"),
         ],
         "explanation": "Тепло – головне. Можна зробити «печеру з ковдр» і зберегти тепло тіла."
     },
@@ -207,28 +217,29 @@ SCENARIOS = {
         "title": "Неправильний вибір",
         "description": "На жаль, це не найкраще рішення для збереження тепла при відключенні опалення.",
         "options": [
-            ("Спробувати ще раз", "apocalypse_3"),
-            ("Повернутися до вибору сценарію", "start"),
+            ("↩️ Спробувати ще раз", "apocalypse_3"),
+            ("🏠 До головного меню", "start"),
         ],
     },
     "apocalypse_result": {
         "title": "Результат: Виживання в блекаут",
         "description": "Вітаємо! Ти набрав 3 бали: успішно пережив відключення електрики.\n\nТи зробив правильні кроки:\n1. Оцінив свої запаси перед тим, як діяти\n2. Подбав про запас безпечної питної води\n3. Зберіг тепло в помешканні",
         "options": [
-            ("Обрати інший сценарій", "start"),
-            ("Пройти цей сценарій знову", "apocalypse_1"),
+            ("🏠 До головного меню", "start"),
+            ("🔄 Пройти ще раз", "apocalypse_1"),
         ],
+        "score": 3
     },
     
     # Forest scenario
     "forest_1": {
-        "title": "Сценарій 4 — Ти загубився в лісі",
+        "title": "Сценарій: Ти загубився в лісі",
         "description": "Під час прогулянки ти відійшов від групи і загубився. Скоро вечір, у тебе лише легка куртка і півпляшки води.",
         "question": "Крок 1: Що робиш першим?",
         "options": [
-            ("Продовжуєш рухатись, шукаючи дорогу", "forest_1_wrong"),
-            ("Зупиняєшся і намагаєшся визначити своє місцезнаходження", "forest_2"),
-            ("Кричиш і кличеш на допомогу", "forest_1_wrong"),
+            ("A) Продовжуєш рухатись", "forest_1_wrong"),
+            ("Б) Визначаєш місце", "forest_2"),
+            ("В) Кличеш на допомогу", "forest_1_wrong"),
         ],
         "explanation": "Коли заблукав, важливо зупинитися та зорієнтуватися, щоб не віддалятися ще більше."
     },
@@ -236,8 +247,8 @@ SCENARIOS = {
         "title": "Неправильний вибір",
         "description": "На жаль, це може лише погіршити ситуацію в лісі.",
         "options": [
-            ("Спробувати ще раз", "forest_1"),
-            ("Повернутися до вибору сценарію", "start"),
+            ("↩️ Спробувати ще раз", "forest_1"),
+            ("🏠 До головного меню", "start"),
         ],
     },
     "forest_2": {
@@ -245,9 +256,9 @@ SCENARIOS = {
         "description": "Ти зупинився, щоб не заблукати ще більше.",
         "question": "Крок 2: Наближається ніч. Твої дії:",
         "options": [
-            ("Продовжуєш шукати дорогу, поки не зовсім темно", "forest_2_wrong"),
-            ("Збираєш матеріали і робиш укриття на ніч", "forest_3"),
-            ("Шукаєш високе дерево, щоб залізти і роздивитися околиці", "forest_2_wrong"),
+            ("A) Шукаєш дорогу", "forest_2_wrong"),
+            ("Б) Робиш укриття", "forest_3"),
+            ("В) Лізеш на дерево", "forest_2_wrong"),
         ],
         "explanation": "Ночівля в лісі без укриття небезпечна. Важливо зберігати тепло та енергію."
     },
@@ -255,8 +266,8 @@ SCENARIOS = {
         "title": "Неправильний вибір",
         "description": "На жаль, це не найкраще рішення при настанні темряви в лісі.",
         "options": [
-            ("Спробувати ще раз", "forest_2"),
-            ("Повернутися до вибору сценарію", "start"),
+            ("↩️ Спробувати ще раз", "forest_2"),
+            ("🏠 До головного меню", "start"),
         ],
     },
     "forest_3": {
@@ -264,9 +275,9 @@ SCENARIOS = {
         "description": "Підготовка до ночівлі збереже твої сили та здоров'я.",
         "question": "Крок 3: Вранці ти знайшов струмок. Що робиш?",
         "options": [
-            ("П'єш воду одразу, бо дуже хочеш пити", "forest_3_wrong"),
-            ("Кип'ятиш воду перед вживанням", "forest_result"),
-            ("Ідеш вздовж струмка, він має вивести до людей", "forest_3_wrong"),
+            ("A) П'єш воду одразу", "forest_3_wrong"),
+            ("Б) Кип'ятиш воду", "forest_result"),
+            ("В) Йдеш вздовж струмка", "forest_3_wrong"),
         ],
         "explanation": "Вода з природних джерел може містити небезпечні мікроорганізми. Кип'ятіння - найнадійніший спосіб знезараження."
     },
@@ -274,26 +285,44 @@ SCENARIOS = {
         "title": "Неправильний вибір",
         "description": "На жаль, це не найбезпечніше рішення щодо води в лісі.",
         "options": [
-            ("Спробувати ще раз", "forest_3"),
-            ("Повернутися до вибору сценарію", "start"),
+            ("↩️ Спробувати ще раз", "forest_3"),
+            ("🏠 До головного меню", "start"),
         ],
     },
     "forest_result": {
         "title": "Результат: Виживання в лісі",
         "description": "Вітаємо! Ти набрав 3 бали: успішно вижив у лісі, дочекався порятунку.\n\nТи зробив правильні кроки:\n1. Зупинився і оцінив ситуацію, не панікуючи\n2. Підготувався до ночівлі, зберігаючи тепло\n3. Безпечно використав знайдену воду",
         "options": [
-            ("Обрати інший сценарій", "start"),
-            ("Пройти цей сценарій знову", "forest_1"),
+            ("🏠 До головного меню", "start"),
+            ("🔄 Пройти ще раз", "forest_1"),
         ],
+        "score": 3
     },
+}
+
+# Define scenario names for results display
+SCENARIO_NAMES = {
+    "desert": "Пустеля",
+    "mountain": "Гори",
+    "apocalypse": "Апокаліпсис",
+    "forest": "Ліс"
 }
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send message on `/start`."""
     scenario = SCENARIOS["start"]
-    keyboard = [[InlineKeyboardButton(text, callback_data=data)] for text, data in scenario["options"]]
+    # Use a 2-column layout for better button spacing
+    keyboard = []
+    row = []
     
-    # Add a "Reset Progress" button
+    for i, (text, data) in enumerate(scenario["options"]):
+        row.append(InlineKeyboardButton(text, callback_data=data))
+        if i % 2 == 1 or i == len(scenario["options"]) - 1:
+            keyboard.append(row)
+            row = []
+    
+    # Add additional buttons in their own rows
+    keyboard.append([InlineKeyboardButton("📊 Результати", callback_data="results")])
     keyboard.append([InlineKeyboardButton("🔄 Скинути прогрес", callback_data="reset")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -306,8 +335,40 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Reset progress and start over."""
+    user_id = update.effective_user.id
+    if user_id in user_scores:
+        del user_scores[user_id]
+    
     await update.message.reply_text("Твій прогрес скинуто! Почнемо спочатку.")
     await start(update, context)
+
+async def show_results(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show user's results for all completed scenarios."""
+    user_id = update.effective_user.id
+    
+    if user_id not in user_scores or not user_scores[user_id]:
+        # No results yet
+        await update.callback_query.message.reply_text(
+            "*Твої результати*\n\nТи ще не пройшов жодного сценарію. Спробуй пройти хоча б один сценарій!",
+            parse_mode="Markdown"
+        )
+        return
+    
+    results_text = "*Твої результати*\n\n"
+    
+    for scenario, score in user_scores[user_id].items():
+        scenario_name = SCENARIO_NAMES.get(scenario, scenario)
+        results_text += f"🎯 *{scenario_name}*: {score}/3 бали\n"
+    
+    # Add a return to main menu button
+    keyboard = [[InlineKeyboardButton("🏠 До головного меню", callback_data="start")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.callback_query.message.reply_text(
+        results_text,
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
+    )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle any message that isn't a command."""
@@ -318,14 +379,31 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     """Handle button callbacks."""
     query = update.callback_query
     await query.answer()
+    user_id = update.effective_user.id
+    
+    # Initialize user scores if not exists
+    if user_id not in user_scores:
+        user_scores[user_id] = {}
     
     # Check if this is a reset request
     if query.data == "reset":
-        # Send a new message instead of editing the current one
+        if user_id in user_scores:
+            del user_scores[user_id]
+        
         await query.message.reply_text("Твій прогрес скинуто! Почнемо спочатку.")
         scenario = SCENARIOS["start"]
-        keyboard = [[InlineKeyboardButton(text, callback_data=data)] for text, data in scenario["options"]]
+        keyboard = []
+        row = []
+        
+        for i, (text, data) in enumerate(scenario["options"]):
+            row.append(InlineKeyboardButton(text, callback_data=data))
+            if i % 2 == 1 or i == len(scenario["options"]) - 1:
+                keyboard.append(row)
+                row = []
+        
+        keyboard.append([InlineKeyboardButton("📊 Результати", callback_data="results")])
         keyboard.append([InlineKeyboardButton("🔄 Скинути прогрес", callback_data="reset")])
+        
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.message.reply_text(
@@ -335,12 +413,29 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
         return
     
+    # Check if this is a results request
+    if query.data == "results":
+        await show_results(update, context)
+        return
+    
     # Get scenario from callback data
     scenario_key = query.data
     scenario = SCENARIOS[scenario_key]
-    keyboard = [[InlineKeyboardButton(text, callback_data=data)] for text, data in scenario["options"]]
     
-    # Add reset button to every scenario
+    # Check if this is a result scenario to update user scores
+    if scenario_key.endswith("_result"):
+        # Extract scenario base name (e.g., "desert" from "desert_result")
+        scenario_base = scenario_key.split("_")[0]
+        # Save the score
+        user_scores[user_id][scenario_base] = scenario.get("score", 3)  # Default to 3 if score is not specified
+    
+    # Create keyboard from options
+    keyboard = []
+    for text, data in scenario["options"]:
+        keyboard.append([InlineKeyboardButton(text, callback_data=data)])
+    
+    # Add additional buttons
+    keyboard.append([InlineKeyboardButton("📊 Результати", callback_data="results")])
     keyboard.append([InlineKeyboardButton("🔄 Скинути прогрес", callback_data="reset")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -351,6 +446,33 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         message_text += f"{scenario['description']}\n\n"
     if "question" in scenario:
         message_text += f"{scenario['question']}\n\n"
+        
+        # Start timer if this is a question
+        # Store the timer start time in context.user_data
+        if not query.data.endswith("_wrong") and not query.data.endswith("_result"):
+            context.user_data["timer_start"] = time.time()
+            context.user_data["current_question"] = query.data
+            
+            # Schedule a timer job
+            job = context.job_queue.run_once(
+                time_up_callback, 
+                QUESTION_TIME_LIMIT,
+                data={
+                    "chat_id": update.effective_chat.id,
+                    "message_id": query.message.message_id,
+                    "user_id": user_id,
+                    "question": query.data
+                }
+            )
+            
+            # Store the job so we can cancel it if user answers before time is up
+            if "timer_jobs" not in context.user_data:
+                context.user_data["timer_jobs"] = {}
+            context.user_data["timer_jobs"][query.data] = job
+            
+            # Add timer to the message
+            message_text += f"⏱️ *Час на відповідь: {QUESTION_TIME_LIMIT} секунд*\n\n"
+    
     if "explanation" in scenario:
         message_text += f"_Пояснення: {scenario['explanation']}_"
     
@@ -359,6 +481,61 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
+
+async def time_up_callback(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Called when the timer for a question expires."""
+    job_data = context.job.data
+    chat_id = job_data["chat_id"]
+    message_id = job_data["message_id"]
+    user_id = job_data["user_id"]
+    question = job_data["question"]
+    
+    # Get the corresponding _wrong destination
+    wrong_destination = f"{question}_wrong"
+    
+    # Check if the wrong destination exists, otherwise go to start
+    if wrong_destination not in SCENARIOS:
+        wrong_destination = "start"
+    
+    # Cancel any existing timer jobs
+    if (user_id in context.dispatcher.user_data and
+        "timer_jobs" in context.dispatcher.user_data[user_id]):
+        timer_jobs = context.dispatcher.user_data[user_id]["timer_jobs"]
+        if question in timer_jobs:
+            if timer_jobs[question].job is not None:
+                timer_jobs[question].job = None
+            del timer_jobs[question]
+    
+    # Get the wrong scenario
+    scenario = SCENARIOS[wrong_destination]
+    
+    # Create keyboard from options
+    keyboard = []
+    for text, data in scenario["options"]:
+        keyboard.append([InlineKeyboardButton(text, callback_data=data)])
+    
+    # Add additional buttons
+    keyboard.append([InlineKeyboardButton("📊 Результати", callback_data="results")])
+    keyboard.append([InlineKeyboardButton("🔄 Скинути прогрес", callback_data="reset")])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Format the message
+    message_text = f"*{scenario['title']}*\n\n"
+    message_text += "⏱️ *Час вийшов!* Ти не встиг відповісти вчасно.\n\n"
+    if "description" in scenario:
+        message_text += f"{scenario['description']}\n\n"
+    
+    try:
+        await context.bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=message_text,
+            reply_markup=reply_markup,
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logger.error(f"Error sending time up message: {e}")
 
 def main() -> None:
     """Start the bot."""
