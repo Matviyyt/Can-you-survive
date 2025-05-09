@@ -330,7 +330,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 def main() -> None:
     """Start the bot."""
     # Create the Application
-    application = Application.builder().token("YOUR_TELEGRAM_BOT_TOKEN").build()
+    # Замініть "YOUR_TELEGRAM_BOT_TOKEN" на токен, отриманий від BotFather
+    application = Application.builder().token("7598948681:AAHcFldyo1IhYlZPfGQ4JROZIRL94EwoUY0
+").build()
     
     # Add handlers
     application.add_handler(CommandHandler("start", start))
